@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>Graphing vs Geometry vs Classic</title>
+  <style>
+    body { font: 12px Consolas, sans-serif; margin: 8px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .col { border: 1px solid #ccc; padding: 6px; }
+    .mount { width: 360px; height: 280px; }
+    pre { max-width: 360px; white-space: pre-wrap; background: #111; color: #cfc; padding: 6px; }
+  </style>
+  <script src="https://www.geogebra.org/apps/deployggb.js"></script>
+</head>
+<body>
+  <h1>对比 appName 对复杂不等式的可见性</h1>
+  <div class="row" id="row"></div>
+  <script>
+    const CMD = 'sin(x)*sin(y)>=0'
+    const CMD2 = '(abs(x)^2)^(1/3)+(abs(y)^2)^(1/3)<=1'
+    const APPS = ['graphing', 'geometry', 'classic', 'suite']
+    const reports = {}
+    window.__APP_COMPARE__ = reports
+
+    function mountApp(appName) {
+      const col = document.createElement('div')
+      col.className = 'col'
+      col.innerHTML = `<h3>${appName}</h3><div class="mount" id="m-${appName}"></div><pre id="o-${appName}">loading…</pre>`
+      document.getElementById('row').appendChild(col)
+      new GGBApplet({
+        appName, width: 360, height: 280,
+        showToolBar: false, showMenuBar: false, showAlgebraInput: true, allowUpscale: false,
+        appletOnLoad(api) {
+          try { api.setErrorDialogsActive(false) } catch (_) {}
+          const out = []
+          ;[CMD, CMD2, 'x^2+y^2<=4'].forEach((c) => {
+            try { api.newConstruction() } catch (_) {}
+            let ok = false
+            try { ok = !!api.evalCommand(c) } catch (_) {}
+            const n = (api.getAllObjectNames() || [])[0]
+            out.push({
+              c, ok, n,
+              type: n ? api.getObjectType(n) : null,
+              vis: n ? api.getVisible(n) : null,
+              def: n ? api.isDefined(n) : null,
+              showXml: n ? /object="true"/.test(api.getXML(n) || '') : null,
+            })
+          })
+          // 同时导入两条复杂的
+          try { api.newConstruction() } catch (_) {}
+          api.evalCommand(CMD)
+          api.evalCommand(CMD2)
+          const both = (api.getAllObjectNames() || []).map((n) => ({
+            n, type: api.getObjectType(n), vis: api.getVisible(n), def: api.isDefined(n),
+          }))
+          reports[appName] = { alone: out, both }
+          document.getElementById('o-' + appName).textContent = JSON.stringify(reports[appName], null, 2)
+        },
+      }, true).inject('m-' + appName)
+    }
+
+    window.addEventListener('load', () => APPS.forEach(mountApp))
+  </script>
+</body>
+</html>

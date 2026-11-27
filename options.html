@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>选中公式 → GeoGebra · 设置</title>
+  <style>
+    body { font: 14px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 720px; margin: 32px auto; padding: 0 16px; color: #222; }
+    label { display: block; margin: 14px 0 6px; font-weight: 600; }
+    input[type="text"], input[type="password"] { width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; }
+    .row { display: flex; gap: 12px; align-items: center; margin-top: 12px; }
+    button { padding: 8px 14px; border: 0; border-radius: 8px; background: #990000; color: #fff; cursor: pointer; font-weight: 600; }
+    .msg { margin-top: 12px; color: #0a7; }
+    .hint { color: #666; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>AI / GeoGebra 设置</h1>
+  <p class="hint">使用七牛 OpenAI 兼容接口。免费模型限流时会自动回退。</p>
+
+  <label for="baseUrl">Base URL</label>
+  <input id="baseUrl" type="text" />
+
+  <label for="apiKey">API Key</label>
+  <input id="apiKey" type="password" />
+
+  <label for="model">主模型</label>
+  <input id="model" type="text" />
+
+  <label for="fallbackModel">回退模型</label>
+  <input id="fallbackModel" type="text" />
+
+  <div class="row">
+    <label><input type="checkbox" id="enabled" /> 启用 AI</label>
+    <label><input type="checkbox" id="showLog" /> 默认显示日志</label>
+    <label><input type="checkbox" id="verboseLog" /> 详细日志</label>
+  </div>
+
+  <div class="row">
+    <button type="button" id="save">保存</button>
+  </div>
+  <div class="msg" id="msg"></div>
+  <script src="options.js"></script>
+</body>
+</html>

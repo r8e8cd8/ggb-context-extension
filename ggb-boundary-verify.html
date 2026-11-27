@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>边界回退验证</title>
+  <style>
+    body { font: 13px Consolas, sans-serif; margin: 8px; }
+    #mount { width: 640px; height: 480px; border: 1px solid #ccc; }
+    pre { background: #111; color: #cfc; padding: 10px; white-space: pre-wrap; }
+  </style>
+  <script src="https://www.geogebra.org/apps/deployggb.js"></script>
+</head>
+<body>
+  <h1>用户 6 条 + 边界回退</h1>
+  <div id="mount"></div>
+  <pre id="out">…</pre>
+  <script>
+    function forceShowAll(api) {
+      ;(api.getAllObjectNames() || []).forEach((n) => {
+        try { api.setVisible(n, true) } catch (_) {}
+        try { if (api.getObjectType(n) === 'inequality') api.setFilling(n, 0.4) } catch (_) {}
+      })
+    }
+    function looksHard(cmd) { return /\b(sin|cos|tan|abs|exp|ln|log)\s*\(/i.test(cmd) }
+    function toEq(cmd) {
+      const eq = String(cmd).replace(/<=|>=|<|>/g, '=')
+      return eq === cmd ? null : eq
+    }
+    function normalize(cmd) {
+      return String(cmd)
+        .replace(/abs\(([^()]*)\)\s*\^\s*\(\s*2\s*\/\s*3\s*\)/gi, '(abs($1)^2)^(1/3)')
+        .replace(/abs\(([^()]*)\)\s*\^\s*\(\s*(\d+)\s*\/\s*(\d+)\s*\)/gi, '(abs($1)^$2)^(1/$3)')
+    }
+    const CMDS = [
+      'x^2+y^2<=4',
+      'x^2+y^2>=1',
+      'y<=sqrt(3)*x',
+      'y>=x/sqrt(3)',
+      'sin(x)*sin(y)>=0',
+      'abs(x)^(2/3)+abs(y)^(2/3)<=1',
+    ].map(normalize)
+
+    window.addEventListener('load', () => {
+      new GGBApplet({
+        appName: 'graphing', width: 640, height: 480,
+        showToolBar: false, showMenuBar: false, showAlgebraInput: true, allowUpscale: false,
+        appletOnLoad(api) {
+          try { api.setErrorDialogsActive(false) } catch (_) {}
+          try { api.newConstruction() } catch (_) {}
+          const imported = []
+          CMDS.forEach((c) => { if (api.evalCommand(c)) imported.push(c) })
+          forceShowAll(api)
+          const boundaries = []
+          imported.forEach((c) => {
+            if (!looksHard(c)) return
+            const eq = toEq(c)
+            if (eq && api.evalCommand(eq)) boundaries.push({ from: c, to: eq })
+          })
+          try { api.setCoordSystem(-4, 4, -3, 3) } catch (_) {}
+          forceShowAll(api)
+          const snap = (api.getAllObjectNames() || []).map((n) => ({
+            n, type: api.getObjectType(n), vis: api.getVisible(n), def: api.isDefined(n),
+            val: String(api.getValueString(n) || '').slice(0, 70),
+          }))
+          const drawable = snap.filter((x) => x.vis && (x.type === 'inequality' || /implicit|conic|equation|curve/i.test(x.type))).length
+          const report = {
+            imported: imported.length,
+            boundaries,
+            drawable,
+            pass: imported.length >= 6 && boundaries.length >= 2 && drawable >= 6,
+            snap,
+          }
+          window.__BOUND_REPORT__ = report
+          document.getElementById('out').textContent = JSON.stringify(report, null, 2)
+        },
+      }, true).inject('mount')
+    })
+  </script>
+</body>
+</html>

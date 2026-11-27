@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>GeoGebra 文字清晰度对比验证</title>
+  <style>
+    body { font: 14px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; margin: 16px; background: #f3f4f6; }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    .hint { color: #555; margin-bottom: 16px; max-width: 900px; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+    .card { background: #fff; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; width: 440px; }
+    .card h2 { margin: 0; padding: 8px 12px; font-size: 13px; color: #fff; }
+    .bad h2 { background: #8b1e1e; }
+    .good h2 { background: #1e6b3a; }
+    .stage { position: relative; width: 440px; height: 560px; background: #fff; }
+    .mount { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; background: #fff; }
+    /* 旧：强制拉伸内部 → 糊、裁切 */
+    .bad .mount > article,
+    .bad .mount > div,
+    .bad .mount iframe,
+    .bad .mount canvas {
+      width: 100% !important;
+      height: 100% !important;
+      max-width: none !important;
+      max-height: none !important;
+    }
+  </style>
+  <script src="https://www.geogebra.org/apps/deployggb.js"></script>
+</head>
+<body>
+  <h1>GeoGebra 嵌入清晰度验证</h1>
+  <p class="hint">左 = 旧（CSS 100% 拉伸 + scaleContainerClass + allowUpscale）。右 = 新（只 setSize，不拉伸）。看代数区「f(x)=e^x」是否发糊、左侧是否被裁。</p>
+  <div class="row">
+    <div class="card bad">
+      <h2>旧：拉伸（易糊）</h2>
+      <div class="stage"><div id="bad-mount" class="mount mtp-ggb-mount"></div></div>
+    </div>
+    <div class="card good">
+      <h2>新：setSize 对齐（应清晰）</h2>
+      <div class="stage"><div id="good-mount" class="mount"></div></div>
+    </div>
+  </div>
+  <script>
+    const cmds = [
+      'f(x)=e^x',
+      'a=0',
+      'g(x)=e^a*(x-a)+e^a',
+      'A=(a,e^a)',
+      'h(x)=(-1/e^a)*(x-a)+e^a',
+    ]
+    function boot(id, opts) {
+      const el = document.getElementById(id)
+      const w = el.clientWidth
+      const h = el.clientHeight
+      const params = {
+        appName: 'graphing',
+        width: w,
+        height: h,
+        showToolBar: true,
+        showToolBarHelp: false,
+        showAlgebraInput: true,
+        showMenuBar: false,
+        autoHeight: false,
+        borderColor: '#ffffff',
+        allowUpscale: !!opts.allowUpscale,
+        appletOnLoad(api) {
+          cmds.forEach((c) => { try { api.evalCommand(c) } catch (_) {} })
+          try { api.setCoordSystem(-4, 4, -2, 5) } catch (_) {}
+          try { api.setSize(el.clientWidth, el.clientHeight) } catch (_) {}
+        },
+      }
+      if (opts.scaleClass) params.scaleContainerClass = opts.scaleClass
+      new GGBApplet(params, true).inject(id)
+    }
+    window.addEventListener('load', () => {
+      boot('bad-mount', { allowUpscale: true, scaleClass: 'mtp-ggb-mount' })
+      boot('good-mount', { allowUpscale: false })
+    })
+  </script>
+</body>
+</html>

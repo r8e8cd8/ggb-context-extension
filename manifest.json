@@ -1,0 +1,64 @@
+{
+  "manifest_version": 3,
+  "name": "选中公式 → GeoGebra",
+  "version": "1.4.9",
+  "description": "选中公式右键 AI 转换；优先页面内嵌，CSP 站点回退顶层窗口",
+  "permissions": ["contextMenus", "storage", "scripting", "clipboardWrite", "windows"],
+  "host_permissions": [
+    "<all_urls>",
+    "https://api.qnaigc.com/*",
+    "https://www.geogebra.org/*",
+    "https://cdn.geogebra.org/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "选中公式 → GeoGebra",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png"
+    }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "sandbox": {
+    "pages": ["ggb-host.html"]
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'",
+    "sandbox": "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.geogebra.org https://cdn.geogebra.org; object-src 'self'; child-src 'self' https://www.geogebra.org https://cdn.geogebra.org blob:"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "exclude_matches": ["*://www.geogebra.org/*", "*://geogebra.org/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "page-bridge.js",
+        "ggb-host.html",
+        "ggb-loader.html",
+        "ggb-loader.js",
+        "ggb-shell.html",
+        "ggb-shell.js",
+        "ggb-panel.html",
+        "ggb-panel.js",
+        "vendor/deployggb.js"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

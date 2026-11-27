@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>不等式探测</title>
+  <style>
+    body { font: 13px Consolas, monospace; margin: 12px; }
+    pre { background: #111; color: #9f9; padding: 10px; white-space: pre-wrap; }
+    #mount { width: 480px; height: 360px; }
+  </style>
+  <script src="https://www.geogebra.org/apps/deployggb.js"></script>
+</head>
+<body>
+  <div id="mount"></div>
+  <pre id="out">loading…</pre>
+  <script>
+    const CANDIDATES = [
+      'sin(x)*sin(y)>=0',
+      'sin(x) sin(y) >= 0',
+      '(sin(x))*(sin(y))>=0',
+      'sin(x)*sin(y)>0',
+      'abs(x)^(2/3)+abs(y)^(2/3)<=1',
+      '(abs(x)^(2/3))+(abs(y)^(2/3))<=1',
+      '(abs(x)^2)^(1/3)+(abs(y)^2)^(1/3)<=1',
+      'cbrt(abs(x)^2)+cbrt(abs(y)^2)<=1',
+      'abs(x)^(2/3)+abs(y)^(2/3)<1',
+      '(x^2+y^2)^3<=4*x^2*y^2',
+      'x^2+y^2<=4',
+      'y<=sqrt(3)*x',
+      'y>=x/sqrt(3)',
+    ]
+    window.addEventListener('load', () => {
+      const el = document.getElementById('mount')
+      new GGBApplet({
+        appName: 'graphing', width: 480, height: 360,
+        showToolBar: false, showMenuBar: false, showAlgebraInput: true, allowUpscale: false,
+        appletOnLoad(api) {
+          try { api.setErrorDialogsActive(false) } catch (_) {}
+          const rows = []
+          CANDIDATES.forEach((cmd) => {
+            try { api.newConstruction() } catch (_) {}
+            let ok = false
+            const t0 = performance.now()
+            try { ok = !!api.evalCommand(cmd) } catch (e) { rows.push({ cmd, ok: false, err: String(e), ms: 0 }); return }
+            const ms = Math.round(performance.now() - t0)
+            const n = api.getObjectNumber ? api.getObjectNumber() : -1
+            rows.push({ cmd, ok, ms, objects: n })
+          })
+          window.__INEQ_PROBE__ = rows
+          document.getElementById('out').textContent = JSON.stringify(rows, null, 2)
+        },
+      }, true).inject('mount')
+    })
+  </script>
+</body>
+</html>

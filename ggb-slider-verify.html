@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>GeoGebra 滑块验证</title>
+  <style>
+    body { font: 14px/1.45 "Segoe UI", "Microsoft YaHei", sans-serif; margin: 16px; background: #f3f4f6; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .card { width: 440px; background: #fff; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
+    h2 { margin: 0; padding: 8px 12px; font-size: 13px; color: #fff; }
+    .a h2 { background: #8b1e1e; }
+    .b h2 { background: #1e6b3a; }
+    .stage { width: 440px; height: 520px; position: relative; }
+    .mount { position: absolute; inset: 0; }
+    pre { margin: 8px 12px; font-size: 12px; background: #111; color: #9fe; padding: 8px; border-radius: 6px; }
+  </style>
+  <script src="https://www.geogebra.org/apps/deployggb.js"></script>
+</head>
+<body>
+  <h1>滑块验证：a=0 vs a=Slider(...)</h1>
+  <p>看代数区里 a 是否出现可拖动滑块。</p>
+  <div class="row">
+    <div class="card a">
+      <h2>A：a=0（常无滑块）</h2>
+      <div class="stage"><div id="m1" class="mount"></div></div>
+      <pre id="r1">loading…</pre>
+    </div>
+    <div class="card b">
+      <h2>B：a=Slider(-2,5) + SetValue</h2>
+      <div class="stage"><div id="m2" class="mount"></div></div>
+      <pre id="r2">loading…</pre>
+    </div>
+  </div>
+  <script>
+    function probe(api) {
+      const names = (api.getAllObjectNames && api.getAllObjectNames()) || []
+      const aType = api.getObjectType ? api.getObjectType('a') : '?'
+      let isSlider = false
+      try {
+        // GeoGebra: free number with slider UI often reports as 'numeric'
+        isSlider = typeof api.isSlider === 'function' ? api.isSlider('a') : null
+      } catch (_) {}
+      let hasSliderCmd = false
+      try {
+        hasSliderCmd = typeof api.getValueString === 'function'
+      } catch (_) {}
+      return { names, aType, isSlider, value: api.getValue ? api.getValue('a') : null, hasSliderCmd }
+    }
+    function boot(id, cmds, outId) {
+      const el = document.getElementById(id)
+      const app = new GGBApplet({
+        appName: 'graphing',
+        width: el.clientWidth,
+        height: el.clientHeight,
+        showToolBar: true,
+        showToolBarHelp: false,
+        showAlgebraInput: true,
+        showMenuBar: false,
+        allowUpscale: false,
+        appletOnLoad(api) {
+          const ok = []
+          cmds.forEach((c) => {
+            let d = false
+            try { d = !!api.evalCommand(c) } catch (_) {}
+            ok.push((d ? 'OK ' : 'FAIL ') + c)
+          })
+          try { api.setCoordSystem(-4, 4, -2, 5) } catch (_) {}
+          const info = probe(api)
+          document.getElementById(outId).textContent = ok.join('\n') + '\n\n' + JSON.stringify(info, null, 2)
+          window['__' + outId] = { api, info, ok }
+        },
+      }, true)
+      app.inject(id)
+    }
+    window.addEventListener('load', () => {
+      boot('m1', [
+        'f(x)=e^x',
+        'a=0',
+        't(x)=e^a*(x-a)+e^a',
+        'A=(a,e^a)',
+      ], 'r1')
+      boot('m2', [
+        'f(x)=e^x',
+        'a=Slider(-2,5,0.1)',
+        'SetValue(a,1)',
+        't(x)=e^a*(x-a)+e^a',
+        'A=(a,e^a)',
+      ], 'r2')
+    })
+  </script>
+</body>
+</html>

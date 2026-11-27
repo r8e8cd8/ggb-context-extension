@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>不等式可见性回归</title>
+  <style>
+    body { font: 13px/1.4 Consolas, "Microsoft YaHei", monospace; margin: 12px; }
+    pre { background: #111; color: #cfc; padding: 12px; white-space: pre-wrap; }
+    #mount { width: 520px; height: 400px; border: 1px solid #ccc; }
+  </style>
+  <script src="https://www.geogebra.org/apps/deployggb.js"></script>
+</head>
+<body>
+  <h1>不等式可见性回归（用户真实 6 条）</h1>
+  <div id="mount"></div>
+  <pre id="out">loading…</pre>
+  <script>
+    function forceShowAll(api) {
+      const names = api.getAllObjectNames() || []
+      names.forEach((n) => {
+        try { api.setVisible(n, true) } catch (_) {}
+        try {
+          if (api.getObjectType(n) === 'inequality') api.setFilling(n, 0.4)
+        } catch (_) {}
+      })
+    }
+
+    function snapshot(api) {
+      return (api.getAllObjectNames() || []).map((n) => ({
+        n,
+        type: api.getObjectType(n),
+        visible: api.getVisible(n),
+        defined: api.isDefined(n),
+        filling: api.getFilling ? api.getFilling(n) : null,
+        value: String(api.getValueString(n) || '').slice(0, 60),
+      }))
+    }
+
+    const CMDS = [
+      'x^2+y^2<=4',
+      'x^2+y^2>=1',
+      'y<=sqrt(3)*x',
+      'y>=x/sqrt(3)',
+      'sin(x)*sin(y)>=0',
+      'abs(x)^(2/3)+abs(y)^(2/3)<=1',
+    ]
+
+    window.addEventListener('load', () => {
+      new GGBApplet({
+        appName: 'graphing', width: 520, height: 400,
+        showToolBar: false, showMenuBar: false, showAlgebraInput: true, allowUpscale: false,
+        appletOnLoad(api) {
+          try { api.setErrorDialogsActive(false) } catch (_) {}
+          try { api.newConstruction() } catch (_) {}
+          CMDS.forEach((c) => { try { api.evalCommand(c) } catch (_) {} })
+
+          const before = snapshot(api)
+          const hiddenBefore = before.filter((x) => x.type === 'inequality' && !x.visible).length
+
+          forceShowAll(api)
+          try { api.showAllObjects && api.showAllObjects() } catch (_) {}
+          forceShowAll(api)
+
+          const after = snapshot(api)
+          const hiddenAfter = after.filter((x) => x.type === 'inequality' && !x.visible).length
+
+          const report = {
+            totalIneq: before.filter((x) => x.type === 'inequality').length,
+            hiddenBefore,
+            hiddenAfter,
+            pass: hiddenBefore >= 1 && hiddenAfter === 0, // 必须复现「先藏」再「强制全显」
+            before,
+            after,
+          }
+          // 若 Graphing 版本不再自动隐藏，只要 after 全显也算可用
+          if (hiddenBefore === 0 && hiddenAfter === 0) report.pass = true
+          window.__VIS_REPORT__ = report
+          document.getElementById('out').textContent = JSON.stringify(report, null, 2)
+        },
+      }, true).inject('mount')
+    })
+  </script>
+</body>
+</html>

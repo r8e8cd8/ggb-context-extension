@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MTP GeoGebra Host</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #fff;
+    }
+    #mtp-ggb-mount {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #fff;
+    }
+    #mtp-ggb-status {
+      position: absolute;
+      left: 8px;
+      top: 8px;
+      z-index: 2;
+      font: 12px/1.4 Consolas, "Microsoft YaHei", sans-serif;
+      color: #666;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <!-- 本地 vendor 优先：不依赖宿主站 CSP；后续 applet 仍从 geogebra.org 拉资源 -->
+  <div id="mtp-ggb-status">loading deployggb…</div>
+  <div id="mtp-ggb-mount" class="mtp-ggb-mount"></div>
+  <script src="vendor/deployggb.js"></script>
+  <script src="page-bridge.js"></script>
+  <script>
+    ;(function () {
+      var el = document.getElementById('mtp-ggb-status')
+      if (!el) return
+      el.textContent = window.GGBApplet ? 'deployggb ok · 1.4.9' : 'deployggb missing'
+      setTimeout(function () {
+        if (el) el.style.display = 'none'
+      }, 1200)
+    })()
+  </script>
+</body>
+</html>

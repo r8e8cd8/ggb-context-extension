@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>MTP GGB Shell</title>
+  <style>
+    html, body, iframe {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
+      background: #fff;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <!--
+    壳页 = 普通扩展页（有 chrome-extension 源）。
+    内嵌 ggb-host 沙箱：GeoGebra 访问 parent.document 时父页同源，不再是网页跨域。
+  -->
+  <iframe id="host" title="ggb-host" src="ggb-host.html?v=1.4.4" allow="clipboard-read; clipboard-write"></iframe>
+  <script src="ggb-shell.js"></script>
+</body>
+</html>

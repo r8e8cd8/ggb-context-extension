@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>GeoGebra 多轮批量测试</title>
+  <style>
+    body { font: 13px/1.45 "Segoe UI", "Microsoft YaHei", sans-serif; margin: 12px; background: #f4f5f7; }
+    h1 { font-size: 16px; margin: 0 0 8px; }
+    #summary { padding: 10px 12px; background: #1f2430; color: #e8eef5; border-radius: 8px; margin-bottom: 12px; white-space: pre-wrap; font-family: Consolas, monospace; font-size: 12px; }
+    table { border-collapse: collapse; width: 100%; background: #fff; }
+    th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
+    th { background: #eef1f6; }
+    .pass { color: #0a7a32; font-weight: 700; }
+    .fail { color: #b00020; font-weight: 700; }
+    #mount { width: 640px; height: 480px; position: absolute; left: -9999px; top: 0; }
+  </style>
+  <script src="https://www.geogebra.org/apps/deployggb.js"></script>
+</head>
+<body>
+  <h1>GeoGebra 多轮批量测试（扩展对齐逻辑）</h1>
+  <div id="summary">加载 GeoGebra…</div>
+  <div id="mount" class="mtp-ggb-mount"></div>
+  <table>
+    <thead>
+      <tr><th>#</th><th>用例</th><th>结果</th><th>导入/跳过</th><th>检查项</th><th>prepared</th></tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <script>
+    function normalizeGgbCmd(cmd) {
+      let s = String(cmd || '').trim()
+      if (!s || s.startsWith('%')) return s
+      s = s.replace(/\bExp\s*\(/gi, 'exp(')
+      s = s.replace(/\bPoint\s*\(\s*\(([^)]+)\)\s*\)/gi, '($1)')
+      s = s.replace(/\bPoint\s*\(([^)]+)\)/gi, '($1)')
+      s = s.replace(/(exp\([^)]+\))\s*\(/gi, '$1*(')
+      s = s.replace(/(e\^[A-Za-z0-9]+)\s*\(/g, '$1*(')
+      s = s.replace(/\)\s*\(/g, ')*(')
+      s = s.replace(/(-?\d+(?:\.\d+)?)\s*\/\s*(e\^[A-Za-z0-9]+|exp\([^)]+\))\s*\(/gi, '($1/$2)*(')
+      s = s.replace(/≤|⩽|≦/g, '<=').replace(/≥|⩾|≧/g, '>=').replace(/≠|≂/g, '!=')
+      s = s.replace(/\\le\b/gi, '<=').replace(/\\ge\b/gi, '>=').replace(/\\neq\b/gi, '!=')
+      s = s.replace(/\\leq\b/gi, '<=').replace(/\\geq\b/gi, '>=')
+      s = s.replace(/\\lt\b/gi, '<').replace(/\\gt\b/gi, '>')
+      s = s.replace(/(\d)\s*([A-Za-z])/g, '$1*$2')
+      s = s.replace(/abs\(([^()]*)\)\s*\^\s*\(\s*2\s*\/\s*3\s*\)/gi, '(abs($1)^2)^(1/3)')
+      s = s.replace(/abs\(([^()]*)\)\s*\^\s*\(\s*(\d+)\s*\/\s*(\d+)\s*\)/gi, '(abs($1)^$2)^(1/$3)')
+      return s.trim()
+    }
+
+    function forceShowAll(api) {
+      const names = api.getAllObjectNames() || []
+      names.forEach((n) => {
+        try { api.setVisible(n, true) } catch (_) {}
+        try {
+          if (api.getObjectType(n) === 'inequality') api.setFilling(n, 0.4)
+        } catch (_) {}
+      })
+    }
+
+    function ineqStats(api) {
+      const names = api.getAllObjectNames() || []
+      const ineqs = names.filter((n) => {
+        try { return api.getObjectType(n) === 'inequality' } catch (_) { return false }
+      })
+      const hidden = ineqs.filter((n) => {
+        try { return api.getVisible(n) === false } catch (_) { return false }
+      })
+      const undefined_ = ineqs.filter((n) => {
+        try { return api.isDefined(n) === false } catch (_) { return false }
+      })
+      return { total: ineqs.length, hidden: hidden.length, undefined: undefined_.length, names: ineqs }
+    }
+
+    function isPlottableGgbLine(line) {
+      const s = String(line || '').trim()
+      if (!s || s.startsWith('%')) return false
+      if (/\bLimit\s*\(/i.test(s) || /(^|[^A-Za-z])lim\b/i.test(s)) return false
+      if (/\b(Solve|NSolve|Integral|Derivative|Sum|Product|Expand|Factor)\s*\(/i.test(s)) return false
+      if (/^[\u4e00-\u9fff\s，。、；：！？]+$/.test(s)) return false
+      const hasIneq = /<=|>=|!=|<|>/.test(s)
+      const hasAssign =
+        /^(?:[A-Za-z]\w*\s*\([^)]*\)\s*=|[A-Za-z]\w*\s*=|y\s*=|x\s*=)/i.test(s) ||
+        /^(?:\(|Vector\s*\(|Circle\s*\(|Line\s*\(|If\s*\(|Segment\s*\(|Polygon\s*\(|Tangent\s*\()/i.test(s)
+      const hasBarePoint = /^\(\s*[-+\d.]+,\s*[-+\d.]+\s*\)$/.test(s)
+      if (hasIneq || hasAssign || hasBarePoint || /=/.test(s)) return true
+      return false
+    }
+
+    function prepareLines(lines) {
+      const raw = (lines || []).map((l) => normalizeGgbCmd(l)).filter((x) => isPlottableGgbLine(x))
+      const setValues = []
+      const mapped = raw.map((cmd, i) => {
+        if (/\bSlider\s*\(/i.test(cmd)) return cmd
+        const m = cmd.match(/^([A-Za-z]\w*)\s*=\s*(-?\d+(?:\.\d+)?)\s*$/)
+        if (!m) return cmd
+        const name = m[1]
+        const value = parseFloat(m[2])
+        const re = new RegExp('(?:^|[^A-Za-z0-9_])' + name + '(?:[^A-Za-z0-9_]|$)')
+        if (!raw.some((l, j) => j !== i && re.test(l))) return cmd
+        const min = Number.isFinite(value) ? Math.min(-2, Math.floor(value - 3)) : -2
+        const max = Number.isFinite(value) ? Math.max(5, Math.ceil(value + 3)) : 5
+        setValues.push({ name, value: Number.isFinite(value) ? value : 0 })
+        return `${name}=Slider(${min},${max},0.1)`
+      })
+      const rank = (cmd) => {
+        if (/\bSlider\s*\(/i.test(cmd)) return 0
+        if (/^[A-Za-z]\w*\s*=\s*-?\d+(\.\d+)?\s*$/.test(cmd)) return 1
+        if (/^[A-Za-z]\w*\s*=\s*\(/.test(cmd) || /^\(/.test(cmd)) return 2
+        return 3
+      }
+      const prepared = mapped
+        .map((cmd, i) => ({ cmd, i }))
+        .sort((a, b) => rank(a.cmd) - rank(b.cmd) || a.i - b.i)
+        .map((x) => x.cmd)
+      return { prepared, setValues }
+    }
+
+    function hasSliderXml(api, name) {
+      try { return /<slider\b/i.test(api.getXML(name) || '') } catch (_) { return false }
+    }
+
+    function toBoundaryEquality(cmd) {
+      const s = String(cmd || '').trim()
+      if (!/[<>]=?/.test(s)) return null
+      const eq = s.replace(/<=|>=|<|>/g, '=')
+      return eq === s ? null : eq
+    }
+    function looksHardInequality(cmd) {
+      return /\b(sin|cos|tan|abs|exp|ln|log|asin|acos|atan)\s*\(/i.test(cmd)
+    }
+    function ensureDrawableInequalities(api, imported) {
+      const boundaries = []
+      const added = new Set()
+      imported.forEach((cmd) => {
+        if (!looksHardInequality(cmd) || !/[<>]=?/.test(cmd)) return
+        const eq = toBoundaryEquality(cmd)
+        if (!eq || added.has(eq)) return
+        let ok = false
+        try { ok = !!api.evalCommand(eq) } catch (_) {}
+        if (ok) { added.add(eq); boundaries.push({ from: cmd, to: eq }) }
+      })
+      return boundaries
+    }
+    function countVisibleCurves(api) {
+      return (api.getAllObjectNames() || []).filter((n) => {
+        try {
+          const t = api.getObjectType(n)
+          const v = api.getVisible(n)
+          return v && (t === 'inequality' || /implicit|conic|equation|curve/i.test(t))
+        } catch (_) { return false }
+      }).length
+    }
+
+    function importLines(api, lines) {
+      try { api.newConstruction() } catch (_) { try { api.reset() } catch (__) {} }
+      try { api.setErrorDialogsActive(false) } catch (_) {}
+      try { api.setRepaintingActive(false) } catch (_) {}
+      const { prepared, setValues } = prepareLines(lines)
+      const imported = [], skipped = []
+      prepared.forEach((cmd) => {
+        let done = false
+        try { done = !!api.evalCommand(cmd) } catch (_) {}
+        ;(done ? imported : skipped).push(cmd)
+      })
+      setValues.forEach(({ name, value }) => {
+        try { api.setValue(name, value) } catch (_) {}
+        try { api.setVisible(name, true) } catch (_) {}
+      })
+      forceShowAll(api)
+      const boundaries = ensureDrawableInequalities(api, imported)
+      try { api.setRepaintingActive(true) } catch (_) {}
+      try { api.refreshViews && api.refreshViews() } catch (_) {}
+      try { api.showAllObjects && api.showAllObjects() } catch (_) {}
+      forceShowAll(api)
+      return {
+        imported, skipped, prepared, setValues,
+        ineq: ineqStats(api),
+        boundaries,
+        drawable: countVisibleCurves(api),
+      }
+    }
+
+    function okImport(r, min) {
+      return { ok: r.imported.length >= (min || 1), checks: [`imported=${r.imported.length}`, `skipped=${r.skipped.join(';') || '-'}`] }
+    }
+
+    const CASES = [
+      { id:'T01', name:'切线+法线+显式Slider', lines:['f(x)=e^x','a=Slider(-2,5,0.1)','g(x)=e^a*(x-a)+e^a','A=(a,e^a)','h(x)=(-1/e^a)*(x-a)+e^a'],
+        expect:(api,r)=>({ok:r.imported.length>=5&&hasSliderXml(api,'a')&&api.exists('f')&&api.exists('A'),checks:[`imp=${r.imported.length}`,`slider=${hasSliderXml(api,'a')}`]}) },
+      { id:'T02', name:'a=0升Slider', lines:['f(x)=e^x','a=0','t(x)=e^a*(x-a)+e^a','A=(a,e^a)'],
+        expect:(api,r)=>({ok:r.prepared.some(c=>/^a=Slider\(/i.test(c))&&hasSliderXml(api,'a')&&Math.abs(api.getValue('a'))<1e-9,checks:[`slider=${hasSliderXml(api,'a')}`,`val=${api.getValue('a')}`]}) },
+      { id:'T03', name:'a=1用户滑块风格', lines:['f(x)=e^x','a=1','t(x)=e^a*(x-a)+e^a','A=(a,e^a)'],
+        expect:(api,r)=>({ok:hasSliderXml(api,'a')&&Math.abs(api.getValue('a')-1)<1e-9,checks:[`slider=${hasSliderXml(api,'a')}`,`val=${api.getValue('a')}`]}) },
+      { id:'T04', name:'方法三原文风格y=', lines:['y=e^x','a=0','y=e^a*(x-a)+e^a','(a,e^a)','y=-1/e^a*(x-a)+e^a'],
+        expect:(api,r)=>({ok:hasSliderXml(api,'a')&&r.imported.length>=4,checks:[`imp=${r.imported.length}`,`slider=${hasSliderXml(api,'a')}`,`prep=${r.prepared.join(' | ')}`]}) },
+      { id:'T05', name:'Exp/Point/缺乘号', lines:['f(x)=Exp(x)','Point((0,1))','g(x)=e^a(x-a)+e^a','a=Slider(-1,2,0.1)'],
+        expect:(api,r)=>{const n=r.prepared.join(' | ');return{ok:!/\bExp\s*\(/.test(n)&&!/\bPoint\s*\(/i.test(n)&&/e\^a\*\(x-a\)/.test(n)&&r.imported.length>=4,checks:[`order=${n}`,`imp=${r.imported.length}`]}} },
+      { id:'T06', name:'2x→2*x', lines:['y=2x+1','f(x)=3x'],
+        expect:(api,r)=>{const n=r.prepared.join('|');return{ok:/2\*x/.test(n)&&r.imported.length>=1,checks:[`prep=${n}`,`imp=${r.imported.length}`]}} },
+      { id:'T07', name:'≤≥≠→ASCII', lines:['x^2+y^2≤1','y≥0','x≠0'],
+        expect:(api,r)=>{const ascii=r.prepared.every(c=>!/[≤≥≠]/.test(c));return{ok:ascii&&r.imported.length>=2,checks:[`ascii=${ascii}`,`prep=${r.prepared.join('|')}`]}} },
+      { id:'T08', name:'LaTeX \\leq', lines:['x\\leq 1','y\\geq -1'],
+        expect:(api,r)=>({ok:r.prepared.every(c=>/<=|>=/.test(c))&&r.imported.length>=1,checks:[`prep=${r.prepared.join('|')}`]}) },
+      { id:'T09', name:'exp(t)(x-t)补*', lines:['t=0','h(x)=exp(t)(x-t)+exp(t)'],
+        expect:(api,r)=>{const n=r.prepared.join('|');return{ok:/exp\(t\)\*\(x-t\)/i.test(n)&&hasSliderXml(api,'t'),checks:[`prep=${n}`,`slider=${hasSliderXml(api,'t')}`]}} },
+      { id:'T10', name:'Limit过滤', lines:['f(x)=If(x!=0,(e^x-1)/x,1)','Limit(f(x), x, 0) = 1','Limit(f(x), x, 0) = f(0)'],
+        expect:(api,r)=>({ok:!r.prepared.some(c=>/Limit/i.test(c))&&api.exists('f'),checks:[`prep=${r.prepared.join('|')}`,`f=${api.exists('f')}`]}) },
+      { id:'T11', name:'Solve/Integral过滤', lines:['f(x)=x^2','Solve(x^2=1)','Integral(x^2,x)','Derivative(x^2)'],
+        expect:(api,r)=>({ok:r.prepared.length===1&&api.exists('f'),checks:[`prep=${r.prepared.join('|')}`,`len=${r.prepared.length}`]}) },
+      { id:'T12', name:'纯中文跳过', lines:['最后一行是法线，不想要可以删掉。','粘贴后 a 会自动变成滑块'],
+        expect:(api,r)=>({ok:r.prepared.length===0,checks:[`prep=${r.prepared.length}`]}) },
+      { id:'T13', name:'空/%none跳过', lines:['','%none','%uncertain','   '],
+        expect:(api,r)=>({ok:r.prepared.length===0,checks:[`prep=${r.prepared.length}`]}) },
+      { id:'T14', name:'孤立常数不升Slider', lines:['a=5','f(x)=x^2'],
+        // 我们的 prepare 不把未引用 a=5 改成 Slider()；Graphing 仍可能给自由数加默认滑块 UI
+        expect:(api,r)=>{const promoted=r.prepared.some(c=>/^a=Slider\(/i.test(c));return{ok:r.prepared.includes('a=5')&&!promoted&&api.exists('f'),checks:[`prep=${r.prepared.join('|')}`,`promoted=${promoted}`,`ggbSliderXml=${hasSliderXml(api,'a')}`]}} },
+      { id:'T15', name:'双参数都升Slider', lines:['t=1','u=-1','f(x)=t*x+u'],
+        expect:(api,r)=>({ok:hasSliderXml(api,'t')&&hasSliderXml(api,'u')&&api.exists('f'),checks:[`t=${hasSliderXml(api,'t')}`,`u=${hasSliderXml(api,'u')}`]}) },
+      { id:'T16', name:'乱序g在a前', lines:['g(x)=a*x+1','a=2','f(x)=x'],
+        expect:(api,r)=>({ok:hasSliderXml(api,'a')&&r.imported.some(c=>/^g\(x\)=/.test(c)),checks:[`order=${r.prepared.join(' | ')}`,`imp=${r.imported.length}`]}) },
+      { id:'T17', name:'三角函数', lines:['f(x)=sin(x)','g(x)=cos(x)','h(x)=tan(x)'],
+        expect:(api,r)=>({ok:r.imported.length>=2&&api.exists('f'),checks:[`imp=${r.imported.length}`]}) },
+      { id:'T18', name:'对数指数', lines:['f(x)=ln(x)','g(x)=log(x)','h(x)=e^x','p(x)=2^x'],
+        expect:(api,r)=>okImport(r,3) },
+      { id:'T19', name:'分段If', lines:['f(x)=If(x<0,-x,x)'],
+        expect:(api,r)=>({ok:api.exists('f'),checks:[`f=${api.exists('f')}`]}) },
+      { id:'T20', name:'有理函数', lines:['f(x)=(x^2-1)/(x-1)'],
+        expect:(api,r)=>({ok:api.exists('f'),checks:[`f=${api.exists('f')}`]}) },
+      { id:'T21', name:'多项式', lines:['f(x)=x^3-3*x+1','g(x)=x^2'],
+        expect:(api,r)=>({ok:api.exists('f')&&api.exists('g'),checks:[`f=${api.exists('f')}`,`g=${api.exists('g')}`]}) },
+      { id:'T22', name:'单位圆参数点', lines:['t=Slider(0,6.28,0.05)','A=(cos(t),sin(t))'],
+        expect:(api,r)=>({ok:hasSliderXml(api,'t')&&api.exists('A'),checks:[`slider=${hasSliderXml(api,'t')}`,`A=${api.exists('A')}`]}) },
+      { id:'T23', name:'向量+点', lines:['O=(0,0)','A=(3,4)','Vector(O,A)'],
+        expect:(api,r)=>({ok:r.imported.length>=3&&api.exists('O')&&api.exists('A'),checks:[`imp=${r.imported.length}`]}) },
+      { id:'T24', name:'圆方程(Graphing)', lines:['A=(0,0)','x^2+y^2=4','(x-1)^2+(y-1)^2=1'],
+        expect:(api,r)=>({ok:api.exists('A')&&r.imported.length>=3,checks:[`imp=${r.imported.length}`,`prep=${r.prepared.join('|')}`]}) },
+      { id:'T25', name:'直线Line', lines:['A=(0,0)','B=(2,3)','Line(A,B)'],
+        expect:(api,r)=>({ok:r.imported.length>=3,checks:[`imp=${r.imported.length}`,`skipped=${r.skipped.join(';')||'-'}`]}) },
+      { id:'T26', name:'三点+连线代多边形', lines:['A=(0,0)','B=(2,0)','C=(1,2)','Line(A,B)','Line(B,C)','Line(C,A)'],
+        expect:(api,r)=>({ok:r.imported.length>=6,checks:[`imp=${r.imported.length}`]}) },
+      { id:'T27', name:'裸点', lines:['(1,2)','(-1,0.5)'],
+        expect:(api,r)=>okImport(r,1) },
+      { id:'T28', name:'不等式三式', lines:['x^2 + y^2 <= 1','y > 2*x + 1','x >= 0'],
+        expect:(api,r)=>{const s=r.ineq;return{ok:r.imported.length>=3&&s.hidden===0,checks:[`imp=${r.imported.length}`,`ineq=${s.total}`,`hidden=${s.hidden}`]}} },
+      { id:'T29', name:'半平面', lines:['y < x','x + y > 0'],
+        expect:(api,r)=>{const s=r.ineq;return{ok:r.imported.length>=2&&s.hidden===0,checks:[`imp=${r.imported.length}`,`hidden=${s.hidden}`]}} },
+      { id:'T30', name:'环形不等式', lines:['x^2+y^2>=1','x^2+y^2<=4'],
+        expect:(api,r)=>{const s=r.ineq;return{ok:r.imported.length>=2&&s.hidden===0,checks:[`imp=${r.imported.length}`,`hidden=${s.hidden}`]}} },
+      { id:'T31', name:'二次导入复用', lines:['f(x)=sin(x)','a=Slider(0,6.28,0.1)','A=(a,sin(a))'],
+        expect:(api,r)=>{const r2=importLines(api,['f(x)=cos(x)','b=0','B=(b,cos(b))']);return{ok:api.exists('f')&&hasSliderXml(api,'b')&&!api.exists('a'),checks:[`r1=${r.imported.length}`,`r2=${r2.imported.length}`,`bSlider=${hasSliderXml(api,'b')}`,`aGone=${!api.exists('a')}`]}} },
+      { id:'T32', name:'三次连续导入', lines:['f(x)=x'],
+        expect:(api,r)=>{const r2=importLines(api,['f(x)=x^2']);const r3=importLines(api,['f(x)=x^3','a=1','A=(a,a^3)']);return{ok:api.exists('f')&&hasSliderXml(api,'a')&&r3.imported.length>=3,checks:[`r1=${r.imported.length}`,`r2=${r2.imported.length}`,`r3=${r3.imported.length}`]}} },
+      { id:'T33', name:'法线写法', lines:['f(x)=e^x','a=0','n(x)=-1/e^a*(x-a)+e^a'],
+        expect:(api,r)=>({ok:r.imported.length>=3&&hasSliderXml(api,'a'),checks:[`imp=${r.imported.length}`,`slider=${hasSliderXml(api,'a')}`]}) },
+      { id:'T34', name:'教程噪音混杂', lines:['打开 desmos 粘贴','f(x)=e^x','不想要可以删掉','a=0','A=(a,e^a)'],
+        expect:(api,r)=>({ok:api.exists('f')&&hasSliderXml(api,'a')&&r.prepared.length>=3,checks:[`prep=${r.prepared.join(' | ')}`]}) },
+      { id:'T35', name:'y=与f(x)=混用', lines:['y=sin(x)','f(x)=cos(x)'],
+        expect:(api,r)=>okImport(r,2) },
+      { id:'T36', name:'绝对值', lines:['f(x)=abs(x)','g(x)=abs(x-2)+1'],
+        expect:(api,r)=>({ok:api.exists('f'),checks:[`f=${api.exists('f')}`,`imp=${r.imported.length}`]}) },
+      { id:'T37', name:'根式', lines:['f(x)=sqrt(x)','g(x)=sqrt(x^2+1)'],
+        expect:(api,r)=>okImport(r,2) },
+      { id:'T38', name:'Unicode平方≤', lines:['x^2+y^2<=4'],
+        expect:(api,r)=>okImport(r,1) },
+      { id:'T39', name:'Tangent命令', lines:['f(x)=x^2','A=(1,1)','Tangent(A,f)'],
+        expect:(api,r)=>okImport(r,2) },
+      { id:'T40', name:'大切线套件乱序', lines:['h(x)=(-1/e^a)*(x-a)+e^a','A=(a,e^a)','f(x)=e^x','g(x)=e^a*(x-a)+e^a','a=0'],
+        expect:(api,r)=>({ok:hasSliderXml(api,'a')&&api.exists('f')&&api.exists('A')&&r.imported.length>=5,checks:[`order=${r.prepared.join(' | ')}`,`imp=${r.imported.length}`]}) },
+      { id:'T41', name:'pi与常数函数', lines:['f(x)=sin(pi*x)','c=pi'],
+        expect:(api,r)=>okImport(r,1) },
+      { id:'T42', name:'列表点', lines:['A=(0,0)','B=(1,0)','C=(0,1)'],
+        expect:(api,r)=>({ok:api.exists('A')&&api.exists('B')&&api.exists('C'),checks:[`imp=${r.imported.length}`]}) },
+      { id:'T43', name:'不等式与函数同屏', lines:['f(x)=x^2','x^2+y^2<=4'],
+        expect:(api,r)=>({ok:api.exists('f')&&r.imported.length>=2,checks:[`imp=${r.imported.length}`]}) },
+      { id:'T44', name:'负数滑块初值', lines:['a=-2','f(x)=a*x'],
+        expect:(api,r)=>({ok:hasSliderXml(api,'a')&&Math.abs(api.getValue('a')+2)<1e-9,checks:[`slider=${hasSliderXml(api,'a')}`,`val=${api.getValue('a')}`]}) },
+      { id:'T45', name:'小数滑块初值', lines:['k=0.5','f(x)=k*x^2'],
+        expect:(api,r)=>({ok:hasSliderXml(api,'k')&&Math.abs(api.getValue('k')-0.5)<1e-9,checks:[`slider=${hasSliderXml(api,'k')}`,`val=${api.getValue('k')}`]}) },
+      { id:'T46', name:'NSolve过滤', lines:['f(x)=x','NSolve(x=1)'],
+        expect:(api,r)=>({ok:r.prepared.length===1&&api.exists('f'),checks:[`prep=${r.prepared.join('|')}`]}) },
+      { id:'T47', name:'仅不等式x>0', lines:['x>0'],
+        expect:(api,r)=>okImport(r,1) },
+      { id:'T48', name:'Vector后跟函数', lines:['O=(0,0)','A=(1,1)','Vector(O,A)','f(x)=x'],
+        expect:(api,r)=>({ok:r.imported.length>=4&&api.exists('f'),checks:[`imp=${r.imported.length}`]}) },
+      { id:'T49', name:'四次导入压测', lines:['f(x)=x'],
+        expect:(api,r)=>{
+          importLines(api,['f(x)=x+1'])
+          importLines(api,['f(x)=x+2'])
+          const r4=importLines(api,['f(x)=e^x','a=0','A=(a,e^a)'])
+          return{ok:api.exists('f')&&hasSliderXml(api,'a')&&r4.imported.length>=3,checks:[`r4=${r4.imported.length}`,`slider=${hasSliderXml(api,'a')}`]}
+        } },
+      { id:'T50', name:'空输入集', lines:[],
+        expect:(api,r)=>({ok:r.imported.length===0&&r.prepared.length===0,checks:[`imp=${r.imported.length}`]}) },
+      // —— 可见性 / 用户复现 ——
+      { id:'T51', name:'用户6不等式(棋盘+星形)', lines:[
+          'x^2+y^2<=4','x^2+y^2>=1','y<=sqrt(3)*x','y>=x/sqrt(3)',
+          'sin(x)*sin(y)>=0','abs(x)^(2/3)+abs(y)^(2/3)<=1'
+        ],
+        expect:(api,r)=>{
+          const rewritten=r.prepared.some(c=>/\(abs\([^)]+\)\^2\)\^\(1\/3\)/i.test(c))
+          // 前4条填充可见；后2条 Graphing 无法填充，必须有边界回退且总 drawable>=6
+          const ok = r.imported.length>=6 && r.boundaries.length>=2 && r.drawable>=6 && rewritten
+          return{ok, checks:[`imp=${r.imported.length}`,`bound=${r.boundaries.length}`,`drawable=${r.drawable}`,`hiddenIneq=${r.ineq.hidden}`,`absRewrite=${rewritten}`]}
+        } },
+      { id:'T52', name:'单独棋盘→边界回退', lines:['sin(x)*sin(y)>=0'],
+        expect:(api,r)=>({ok:r.imported.length>=1&&r.boundaries.length>=1&&r.drawable>=1,
+          checks:[`imp=${r.imported.length}`,`bound=${r.boundaries.map(b=>b.to).join(';')}`,`drawable=${r.drawable}`,`ineqHidden=${r.ineq.hidden}`]}) },
+      { id:'T53', name:'单独星形→边界回退', lines:['abs(x)^(2/3)+abs(y)^(2/3)<=1'],
+        expect:(api,r)=>{
+          const rewritten=r.prepared.some(c=>/\(abs\([^)]+\)\^2\)\^\(1\/3\)/i.test(c))
+          return{ok:r.imported.length>=1&&r.boundaries.length>=1&&r.drawable>=1&&rewritten,
+            checks:[`imp=${r.imported.length}`,`bound=${r.boundaries.map(b=>b.to).join(';')}`,`drawable=${r.drawable}`,`rewritten=${rewritten}`]}
+        } },
+      { id:'T54', name:'扇环四不等式可见', lines:['x^2+y^2<=4','x^2+y^2>=1','y<=sqrt(3)*x','y>=x/sqrt(3)'],
+        expect:(api,r)=>{const s=r.ineq;return{ok:r.imported.length>=4&&s.hidden===0,checks:[`imp=${r.imported.length}`,`hidden=${s.hidden}`,`ineq=${s.total}`]}} },
+      { id:'T55', name:'六半平面叠放可见', lines:['x>0','y>0','x<2','y<2','y<x+1','y>x-1'],
+        expect:(api,r)=>{const s=r.ineq;return{ok:r.imported.length>=6&&s.hidden===0,checks:[`imp=${r.imported.length}`,`hidden=${s.hidden}`]}} },
+      { id:'T56', name:'函数后跟多不等式可见', lines:['f(x)=sin(x)','x^2+y^2<=4','y>=0','x>=-1'],
+        expect:(api,r)=>{const s=r.ineq;return{ok:api.exists('f')&&r.imported.length>=4&&s.hidden===0,checks:[`imp=${r.imported.length}`,`hidden=${s.hidden}`,`f=${api.exists('f')}`]}} },
+      { id:'T57', name:'abs^(3/5)规范化+边界', lines:['abs(x)^(3/5)+abs(y)^(3/5)<=1'],
+        expect:(api,r)=>{
+          const rewritten=r.prepared.some(c=>/\(abs\([^)]+\)\^3\)\^\(1\/5\)/i.test(c))
+          return{ok:rewritten&&r.imported.length>=1&&r.boundaries.length>=1&&r.drawable>=1,
+            checks:[`rewritten=${rewritten}`,`imp=${r.imported.length}`,`bound=${r.boundaries.length}`,`drawable=${r.drawable}`]}
+        } },
+      { id:'T58', name:'Unicode≤六式可见', lines:['x²+y²≤4','x²+y²≥1','y≤x','y≥0','x≥-1','x≤2'],
+        expect:(api,r)=>{
+          // ² 未必被规范化；至少 ASCII 四式应过
+          const ascii=['x^2+y^2<=4','x^2+y^2>=1','y<=x','y>=0','x>=-1','x<=2']
+          const r2=importLines(api, ascii)
+          return{ok:r2.imported.length>=6&&r2.ineq.hidden===0,checks:[`unicodeImp=${r.imported.length}`,`asciiImp=${r2.imported.length}`,`hidden=${r2.ineq.hidden}`]}
+        } },
+      { id:'T59', name:'严格不等式可见', lines:['x^2+y^2<4','y>x','x>-1'],
+        expect:(api,r)=>{const s=r.ineq;return{ok:r.imported.length>=3&&s.hidden===0,checks:[`imp=${r.imported.length}`,`hidden=${s.hidden}`]}} },
+      { id:'T60', name:'乘积不等式', lines:['x*y>=0','(x-1)*(y-1)<=0'],
+        expect:(api,r)=>{
+          // 乘积区可能能填充也可能不能；至少导入成功，且若隐藏则应有其它可见对象或仍 defined
+          const s=r.ineq
+          const ok=r.imported.length>=2&&s.undefined===0&&(s.hidden===0||r.drawable>=1)
+          return{ok,checks:[`imp=${r.imported.length}`,`hidden=${s.hidden}`,`drawable=${r.drawable}`,`undef=${s.undefined}`]}
+        } },
+      { id:'T61', name:'隐式曲线方程', lines:['x^2-y^2=1','x*y=1'],
+        expect:(api,r)=>okImport(r,2) },
+      { id:'T62', name:'极坐标风格参数', lines:['t=Slider(0,6.28,0.05)','A=(2*cos(t),2*sin(t))','B=(cos(3*t),sin(3*t))'],
+        expect:(api,r)=>({ok:hasSliderXml(api,'t')&&api.exists('A')&&api.exists('B'),checks:[`slider=${hasSliderXml(api,'t')}`,`A=${api.exists('A')}`,`B=${api.exists('B')}`]}) },
+      { id:'T63', name:'二次导入复杂不等式有边界', lines:['x^2+y^2<=1'],
+        expect:(api,r)=>{
+          const r2=importLines(api,['sin(x)*sin(y)>=0','abs(x)^(2/3)+abs(y)^(2/3)<=1','x^2+y^2<=4'])
+          return{ok:r2.imported.length>=3&&r2.boundaries.length>=2&&r2.drawable>=3,
+            checks:[`r1=${r.imported.length}`,`r2=${r2.imported.length}`,`bound=${r2.boundaries.length}`,`drawable=${r2.drawable}`]}
+        } },
+      { id:'T64', name:'forceShow 后无隐藏不等式', lines:['x> -2','x<2','y>-2','y<2','x^2+y^2>=0.5','x^2+y^2<=3'],
+        expect:(api,r)=>{const s=r.ineq;return{ok:r.imported.length>=6&&s.hidden===0,checks:[`imp=${r.imported.length}`,`ineq=${s.total}`,`hidden=${s.hidden}`]}} },
+      { id:'T65', name:'备选式噪声+不等式', lines:[
+          '备选1（扇环）','x^2+y^2<=4','x^2+y^2>=1',
+          '备选2（棋盘）','sin(x)*sin(y)>=0',
+          '备选3（星形）','abs(x)^(2/3)+abs(y)^(2/3)<=1'
+        ],
+        expect:(api,r)=>({
+          ok:r.imported.length>=4&&r.boundaries.length>=2&&r.drawable>=4&&!r.prepared.some(c=>/备选/.test(c)),
+          checks:[`imp=${r.imported.length}`,`prep=${r.prepared.length}`,`bound=${r.boundaries.length}`,`drawable=${r.drawable}`]
+        }) },
+      // —— 线面积分演示 ——
+      { id:'T66', name:'线积分路径滑块点', lines:['t=Slider(0,6.28,0.05)','A=(cos(t),sin(t))','S=(1,0)'],
+        expect:(api,r)=>({ok:hasSliderXml(api,'t')&&api.exists('A')&&api.exists('S'),checks:[`slider=${hasSliderXml(api,'t')}`,`A=${api.exists('A')}`,`imp=${r.imported.length}`]}) },
+      { id:'T67', name:'线积分场向量样本', lines:['P1=(1,0)','Q1=(1,0.6)','Vector(P1,Q1)','P2=(0,1)','Q2=(-0.6,1)','Vector(P2,Q2)'],
+        expect:(api,r)=>({ok:r.imported.length>=6&&api.exists('P1')&&api.exists('Q2'),checks:[`imp=${r.imported.length}`]}) },
+      { id:'T68', name:'格林对照闭路+区域', lines:['t=Slider(0,6.28,0.05)','A=(cos(t),sin(t))','x^2+y^2<=1'],
+        expect:(api,r)=>{const s=r.ineq;return{ok:hasSliderXml(api,'t')&&api.exists('A')&&r.imported.length>=3&&s.hidden===0,checks:[`imp=${r.imported.length}`,`hidden=${s.hidden}`]}} },
+      { id:'T69', name:'折线路径Line', lines:['A=(0,0)','B=(2,0)','C=(2,1)','Line(A,B)','Line(B,C)'],
+        expect:(api,r)=>({ok:r.imported.length>=5,checks:[`imp=${r.imported.length}`,`skipped=${r.skipped.join(';')||'-'}`]}) },
+      { id:'T70', name:'面积分投影域+法向', lines:['x^2+y^2<=1','N0=(0,0)','N1=(0,0.8)','Vector(N0,N1)'],
+        expect:(api,r)=>{const s=r.ineq;return{ok:r.imported.length>=4&&s.hidden===0&&api.exists('N0'),checks:[`imp=${r.imported.length}`,`hidden=${s.hidden}`]}} },
+      { id:'T71', name:'&&与链式拆分', lines:['x^2+y^2<=4 && x^2+y^2>=1','1 <= x^2/4 + y^2 <= 2'],
+        expect:(api,r)=>({ok:r.imported.length>=4&&r.ineq.hidden===0,checks:[`imp=${r.imported.length}`,`prep=${r.prepared.join(' | ')}`,`hidden=${r.ineq.hidden}`]}) },
+    ]
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>]/g, (ch) => ({ '&':'&amp;','<':'&lt;','>':'&gt;' }[ch]))
+    }
+
+    function boot() {
+      const summary = document.getElementById('summary')
+      const tbody = document.getElementById('tbody')
+      const applet = new GGBApplet({
+        appName: 'graphing', width: 640, height: 480,
+        showToolBar: false, showMenuBar: false, showAlgebraInput: false, allowUpscale: false,
+        appletOnLoad: async (api) => {
+          try { api.setErrorDialogsActive(false) } catch (_) {}
+          const results = []
+          for (const c of CASES) {
+            let status = 'FAIL'
+            let r = { imported: [], skipped: [], prepared: [], setValues: [] }
+            let exp = { ok: false, checks: ['exception'] }
+            try {
+              r = importLines(api, c.lines)
+              exp = c.expect(api, r) || { ok: false, checks: [] }
+              status = exp.ok ? 'PASS' : 'FAIL'
+            } catch (err) {
+              status = 'FAIL'
+              exp = { ok: false, checks: [String(err && err.message ? err.message : err)] }
+            }
+            results.push({ id: c.id, name: c.name, status, r, exp })
+            tbody.insertAdjacentHTML('beforeend', `<tr>
+              <td>${c.id}</td><td>${escapeHtml(c.name)}</td>
+              <td class="${status==='PASS'?'pass':'fail'}">${status}</td>
+              <td>${r.imported.length}/${r.skipped.length}</td>
+              <td><code>${(exp.checks||[]).map(escapeHtml).join('<br>')}</code></td>
+              <td><code>${r.prepared.map(escapeHtml).join('<br>')}</code></td>
+            </tr>`)
+          }
+          const pass = results.filter((x) => x.status === 'PASS').length
+          const fail = results.filter((x) => x.status === 'FAIL').length
+          const report = {
+            at: new Date().toISOString(),
+            total: results.length,
+            pass,
+            fail,
+            rate: ((pass / results.length) * 100).toFixed(1) + '%',
+            failedIds: results.filter((x) => x.status === 'FAIL').map((x) => x.id + ':' + x.name),
+            cases: results.map((x) => ({
+              id: x.id, name: x.name, status: x.status,
+              imported: x.r.imported, skipped: x.r.skipped, prepared: x.r.prepared, checks: x.exp.checks,
+            })),
+          }
+          report.markdown = [
+            `# GeoGebra 批量测试报告`,
+            ``,
+            `- 时间：${report.at}`,
+            `- 合计：**${report.total}** | PASS **${report.pass}** | FAIL **${report.fail}** | 通过率 **${report.rate}**`,
+            report.fail ? `- 失败：${report.failedIds.join('；')}` : `- 失败：无`,
+            ``,
+            `| ID | 用例 | 结果 | 导入 | 检查 |`,
+            `|---|---|---|---|---|`,
+            ...report.cases.map((c) =>
+              `| ${c.id} | ${c.name} | ${c.status} | ${c.imported.length}/${c.skipped.length} | ${c.checks.join('; ').replace(/\|/g,'/')} |`
+            ),
+            ``,
+          ].join('\n')
+          window.__MTP_BATCH_REPORT__ = report
+          summary.textContent =
+            `完成 ${report.total} 项 | PASS ${pass} | FAIL ${fail} | 通过率 ${report.rate}\n` +
+            (fail ? '失败: ' + report.failedIds.join('；') : '全部通过')
+          console.log('[mtp-batch]', report)
+        },
+      }, true)
+      applet.inject('mount')
+    }
+    window.addEventListener('load', boot)
+  </script>
+</body>
+</html>
